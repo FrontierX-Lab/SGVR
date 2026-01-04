@@ -1,7 +1,5 @@
 # Milestones over Outcome: Unlocking Geometric Reasoning with Sub-Goal Verifiable Reward
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 This is the official repository for the paper "Milestones over Outcome: Unlocking Geometric Reasoning with Sub-Goal Verifiable Reward".
 
 ![Framework](assets/framework.png)

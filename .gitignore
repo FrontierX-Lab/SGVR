@@ -1,6 +1,9 @@
 # PDF files
 *.pdf
 
+# OS
+.DS_Store
+
 # Python
 .venv
 
