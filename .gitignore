@@ -1,0 +1,13 @@
+# PDF files
+*.pdf
+
+# Python
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
