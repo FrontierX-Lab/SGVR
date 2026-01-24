@@ -18,8 +18,28 @@ Multimodal Large Language Models (MLLMs) struggle with complex geometric reasoni
 
 ## Code and Data
 
-**Code and datasets will be released within one month.**
+The GeoGoal-SGVR dataset is now available on Hugging Face:
 
+- **Dataset**: [GeoGoal-SGVR on Hugging Face](https://huggingface.co/datasets/carpe002/GeoGoal-SGVR)
+
+**Code will be released within one month.**
+
+
+## Citation
+
+If you find this work useful, please cite our paper:
+
+```bibtex
+@misc{chen2026milestonesoutcomeunlockinggeometric,
+      title={Milestones over Outcome: Unlocking Geometric Reasoning with Sub-Goal Verifiable Reward}, 
+      author={Jianlong Chen and Daocheng Fu and Shengze Xu and Jiawei Chen and Yuan Feng and Yue Yang and Junchi Yan and Hongyuan Zha and Renqiu Xia},
+      year={2026},
+      eprint={2601.05073},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2601.05073}, 
+}
+```
 
 ## License
 
