@@ -20,10 +20,6 @@ REPETITION_PENALTY_WEIGHT = 0.0
 FINAL_GOAL_REWARD_WEIGHT = 0.0  
 # =====================================================
 
-# ==================== API Validation Configuration ====================
-ENABLE_SUBGOAL_COUNT_CHECK = False  # Whether to enable subgoal count checking
-MAX_RETRY_ATTEMPTS = 0  # Maximum retry attempts (when count mismatch occurs)
-# =====================================================
 
 # API configuration - must be set via environment variables
 INFER_BASE_URL = os.environ.get("INFER_BASE_URL")
@@ -247,91 +243,6 @@ def safe_format(template: str, **kwargs) -> str:
 
 
 
-def _get_groundtruth_subgoal_count(groundtruth_solution: str) -> int:
-    """Get subgoal count from ground truth by code parsing
-    Parse from solution field, format is usually a list like ['1', '0', '1'], or a single value or empty
-    """
-    if not groundtruth_solution:
-        return 0
-    
-    try:
-        # Clean solution string, remove possible whitespace
-        solution_str = groundtruth_solution.strip()
-        
-        # Try to parse as Python list (using ast.literal_eval is safer)
-        import ast
-        try:
-            # Try using ast.literal_eval for parsing (safer)
-            parsed = ast.literal_eval(solution_str)
-            
-            if isinstance(parsed, list):
-                # If it's a list, return list length
-                count = len(parsed)
-                print(f"DEBUG: Parsed ground truth subgoal count (list): {count}")
-                return count
-            elif parsed is not None:
-                # If it's a single value (not a list), return 1
-                print(f"DEBUG: Parsed ground truth subgoal count (single value): 1")
-                return 1
-            else:
-                # If it's None or empty, return 0
-                print(f"DEBUG: Parsed ground truth subgoal count (empty): 0")
-                return 0
-                
-        except (ValueError, SyntaxError):
-            # If ast.literal_eval fails, try using eval (less safe but more compatible)
-            try:
-                parsed = eval(solution_str)
-                
-                if isinstance(parsed, list):
-                    count = len(parsed)
-                    print(f"DEBUG: Parsed ground truth subgoal count (list, using eval): {count}")
-                    return count
-                elif parsed is not None:
-                    print(f"DEBUG: Parsed ground truth subgoal count (single value, using eval): 1")
-                    return 1
-                else:
-                    print(f"DEBUG: Parsed ground truth subgoal count (empty, using eval): 0")
-                    return 0
-                    
-            except Exception as eval_error:
-                print(f"DEBUG: Failed to parse solution, trying regex matching: {eval_error}")
-                # If eval also fails, try regex matching for list format
-                # Match formats like ['1', '0', '1'] or ["1", "0", "1"]
-                list_match = re.search(r'\[(.*?)\]', solution_str)
-                if list_match:
-                    # Extract list content, count comma-separated elements
-                    list_content = list_match.group(1).strip()
-                    if not list_content:
-                        # Empty list
-                        print(f"DEBUG: Parsed ground truth subgoal count (empty list): 0")
-                        return 0
-                    else:
-                        # Count elements (separated by commas, but be careful of commas in strings)
-                        # Simple method: count quote pairs
-                        quoted_items = re.findall(r'["\']([^"\']*)["\']', list_content)
-                        if quoted_items:
-                            count = len(quoted_items)
-                            print(f"DEBUG: Parsed ground truth subgoal count (regex matched list): {count}")
-                            return count
-                        else:
-                            # If no quotes, split by comma
-                            items = [item.strip() for item in list_content.split(',') if item.strip()]
-                            count = len(items) if items else 0
-                            print(f"DEBUG: Parsed ground truth subgoal count (regex matched, no quotes): {count}")
-                            return count if count > 0 else 1  # If no separator found, might be a single value
-                
-                # If nothing matches, might be a single value, return 1
-                print(f"DEBUG: Parsed ground truth subgoal count (default single value): 1")
-                return 1
-        
-    except Exception as e:
-        print(f"Failed to parse ground truth subgoal count: {e}")
-        import traceback
-        print(traceback.format_exc())
-        # Return 0 on error
-        return 0
-
 def combined_accuracy_reward_func(student_answer: str, groundtruth_solution: str) -> tuple:
     """Combined accuracy reward calculation, returns true/false labels for each subgoal and final goal result"""
     if not student_answer or not groundtruth_solution:
@@ -339,74 +250,8 @@ def combined_accuracy_reward_func(student_answer: str, groundtruth_solution: str
         return [], 0.0
     
     try:
-        print(f"DEBUG: combined_accuracy_reward_func - Starting API call")
-        
-        # Get ground truth subgoal count (if checking is enabled)
-        gt_subgoal_count = 0
-        if ENABLE_SUBGOAL_COUNT_CHECK:
-            gt_subgoal_count = _get_groundtruth_subgoal_count(groundtruth_solution)
-            print(f"DEBUG: Ground truth subgoal count: {gt_subgoal_count}")
-        
-        # Build new evaluation prompt, return true/false labels for each subgoal
-        # Choose different template based on whether checking is enabled
-        if ENABLE_SUBGOAL_COUNT_CHECK:
-            # New template: explicitly state it's a template, don't copy example values
-            count_hint = ""
-            if gt_subgoal_count > 0:
-                count_hint = f"\n\nCRITICAL: The ground truth solution contains EXACTLY {gt_subgoal_count} sub-goals. You MUST return exactly {gt_subgoal_count} items in the \"subgoal_results\" array, with indices from 0 to {gt_subgoal_count - 1}. Do NOT copy the example values below - you must analyze the actual content."
-            
-            combined_eval_prompt = f"""You are given two solutions to a geometry problem that requires numerical answers. Your task is to evaluate each sub-goal in the student's answer.
-
-Output STRICT JSON only with the schema below:
-
-{{
-  "subgoal_results": [
-    {{"index": 0, "correct": true}},
-    {{"index": 1, "correct": false}},
-    {{"index": 2, "correct": true}}
-  ],
-  "final_answer_correct": boolean
-}}
-
-IMPORTANT: The above is a TEMPLATE showing the format only. DO NOT copy these example values!
-- "index" must be integers starting from 0, 1, 2, 3, ... (one for each sub-goal you find in the ground truth)
-- "correct" must be either true or false (boolean values, not strings)
-- You must count ALL sub-goals in the ground truth solution and return exactly that many items
-- The number of items in "subgoal_results" MUST match the actual number of sub-goals in the ground truth solution{count_hint}
-
-Rules for Sub-goal Evaluation:
-- Extract each numerical answer or conclusion from the ground truth solution
-- For each sub-goal, check if the student's corresponding answer is mathematically equivalent
-- Consider mathematical equivalence (e.g., 1/2 = 0.5, √2 ≈ 1.414, 2√2 ≈ 2.828)
-- Accept both exact forms (like √2) and decimal approximations (like 1.414)
-- Accept both fraction forms (like 1/2) and decimal forms (like 0.5)
-- Use tolerance of 0.02 for decimal comparisons
-- For each sub-goal, return true if correct, false if incorrect
-- IMPORTANT: The number of sub-goals in "subgoal_results" must match the total number of sub-goals in the ground truth solution
-
-Rules for Final Goal:
-- Extract the final answer from both the student's solution and the ground truth solution
-- The final answer is typically the last numerical result or conclusion
-- Consider mathematical equivalence (e.g., 1/2 = 0.5, √2 ≈ 1.414, 2√2 ≈ 2.828)
-- Accept both exact forms (like √2) and decimal approximations (like 1.414)
-- Accept both fraction forms (like 1/2) and decimal forms (like 0.5)
-- Use tolerance of 0.02 for decimal comparisons
-- Return true if the final answers match, false otherwise
-
-Student Answer:
-{student_answer}
-
-Ground Truth Solution:
-{groundtruth_solution}
-
-Please analyze:
-1. Extract all sub-goals from the ground truth solution
-2. For each sub-goal, check if the student's corresponding answer is correct
-3. Extract the final answer from both solutions and compare
-4. Provide the results in the JSON format above"""
-        else:
-            # Old template: used when checking is not enabled
-            combined_eval_prompt = """You are given two solutions to a geometry problem that requires numerical answers. Your task is to evaluate each sub-goal in the student's answer.
+        # Build evaluation prompt
+        combined_eval_prompt = """You are given two solutions to a geometry problem that requires numerical answers. Your task is to evaluate each sub-goal in the student's answer.
 
 Output STRICT JSON only with the schema below:
 
@@ -457,98 +302,38 @@ Please analyze:
             groundtruth_solution=_escape_braces(groundtruth_solution)
         )
         
-        # Call API to get score (using configured max retry attempts)
-        max_retries = MAX_RETRY_ATTEMPTS
+        # Call API to get score
+        content = _call_eval_model(prompt, model="gpt-5-nano")
+        
+        # Parse score
+        eval_json = _extract_json_block(content)
         subgoal_results = []
         final_goal_score = 0.0
-        content = ""
         
-        for attempt in range(max_retries):
-            content = _call_eval_model(prompt, model="gpt-5-nano")
-            print(f"DEBUG: combined_accuracy_reward_func API returned content (attempt {attempt + 1}/{max_retries}): {content}")
-            
-            # Parse score
-            eval_json = _extract_json_block(content)
-            print(f"DEBUG: combined_accuracy_reward_func parsed JSON: {eval_json}")
-            
-            subgoal_results = []
-            final_goal_score = 0.0
-            
-            if isinstance(eval_json, dict):
-                try:
-                    # Parse subgoal results
-                    subgoals = eval_json.get('subgoal_results', [])
-                    if isinstance(subgoals, list):
-                        subgoal_results = subgoals
-                    
-                    # Parse final goal score
-                    final_correct = eval_json.get('final_answer_correct', False)
-                    if isinstance(final_correct, bool):
-                        final_goal_score = 1.0 if final_correct else 0.0
-                        
-                except Exception as e:
-                    print(f"Error parsing JSON: {e}")
-            
-            # If JSON parsing fails, try extracting from text
-            if not subgoal_results and isinstance(content, str):
-                # Try extracting subgoal results
-                subgoal_match = re.search(r'"subgoal_results"\s*:\s*\[(.*?)\]', content, re.DOTALL)
-                if subgoal_match:
-                    try:
-                        subgoal_str = "[" + subgoal_match.group(1) + "]"
-                        subgoal_results = json.loads(subgoal_str)
-                    except:
-                        pass
-            
-            # Check if index count matches ground truth subgoal count (if checking is enabled)
-            if ENABLE_SUBGOAL_COUNT_CHECK and gt_subgoal_count > 0 and subgoal_results:
-                returned_count = len(subgoal_results)
-                if returned_count != gt_subgoal_count:
-                    print(f"Warning: Returned index count ({returned_count}) does not match ground truth subgoal count ({gt_subgoal_count})")
-                    
-                    # If there are retry opportunities, modify prompt and retry
-                    if attempt < max_retries - 1:
-                        # Add reminder to prompt
-                        retry_prompt = prompt + f"""
-
-IMPORTANT CORRECTION NEEDED:
-Your previous response had {returned_count} sub-goals in the "subgoal_results" array, but the ground truth solution actually contains {gt_subgoal_count} sub-goals. 
-Please carefully re-analyze the ground truth solution and ensure that:
-1. You extract ALL {gt_subgoal_count} sub-goals from the ground truth solution
-2. The "subgoal_results" array contains exactly {gt_subgoal_count} items with indices from 0 to {gt_subgoal_count - 1}
-3. Each sub-goal in the ground truth solution must have a corresponding entry in "subgoal_results"
-
-Please provide a corrected JSON response with the correct number of sub-goals."""
-                        prompt = retry_prompt
-                        print(f"DEBUG: Re-calling API, added count mismatch reminder")
-                        continue
-                    else:
-                        print(f"Warning: Reached maximum retry attempts ({max_retries}), returning current result")
-                else:
-                    # Count matches, return directly
-                    print(f"DEBUG: Count check passed, returning result")
-                    break
-            else:
-                # If checking is not enabled, or cannot get ground truth count, or no result returned, return directly
-                if not ENABLE_SUBGOAL_COUNT_CHECK:
-                    # Checking not enabled, return after first call
-                    break
-                elif gt_subgoal_count == 0:
-                    # Cannot get ground truth count, return directly
-                    print(f"DEBUG: Cannot get ground truth count, returning current result")
-                    break
-                elif not subgoal_results:
-                    # No result returned, return directly
-                    print(f"DEBUG: No subgoal_results obtained, returning current result")
-                    break
+        if isinstance(eval_json, dict):
+            try:
+                # Parse subgoal results
+                subgoals = eval_json.get('subgoal_results', [])
+                if isinstance(subgoals, list):
+                    subgoal_results = subgoals
+                
+                # Parse final goal score
+                final_correct = eval_json.get('final_answer_correct', False)
+                if isinstance(final_correct, bool):
+                    final_goal_score = 1.0 if final_correct else 0.0
+            except Exception as e:
+                print(f"Error parsing JSON: {e}")
         
-        # If JSON parsing fails, try extracting final goal from text
+        # If JSON parsing fails, try extracting from text
         if not subgoal_results and isinstance(content, str):
-            # Try extracting final goal
-            if "true" in content.lower() or "correct" in content.lower():
-                final_goal_score = 1.0
-            elif "false" in content.lower() or "incorrect" in content.lower():
-                final_goal_score = 0.0
+            # Try extracting subgoal results
+            subgoal_match = re.search(r'"subgoal_results"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+            if subgoal_match:
+                try:
+                    subgoal_str = "[" + subgoal_match.group(1) + "]"
+                    subgoal_results = json.loads(subgoal_str)
+                except:
+                    pass
         
         return subgoal_results, final_goal_score
             
@@ -673,12 +458,6 @@ def format_reward_func(completion):
             return 0.0
     else:
         return 0.0
-    # else:
-    #     # Keep original logic: check if proof tags are included
-    #     if "<proof>" in completion and "</proof>" in completion:
-    #         return 0.5
-    #     else:
-    #         return 0.0
 
 
 def accuracy_reward_func(student_solution: str, groundtruth_solution: str) -> float:
@@ -698,55 +477,6 @@ def accuracy_reward_func(student_solution: str, groundtruth_solution: str) -> fl
         print(f"accuracy_reward_func error: {e}")
         return 0.0
 
-def extract_ref_proof_from_label(label: str) -> dict:
-    """Extract ref_proof field from label"""
-    try:
-        # Find <ref_proof> tags
-        ref_proof_match = re.search(r"<ref_proof>(.*?)</ref_proof>", label, re.DOTALL)
-        if ref_proof_match:
-            ref_proof_str = ref_proof_match.group(1).strip()
-            # Try parsing as JSON
-            try:
-                return json.loads(ref_proof_str)
-            except json.JSONDecodeError:
-                # If JSON parsing fails, try using eval to parse Python dict
-                try:
-                    # Use eval to parse Python dict string
-                    result = eval(ref_proof_str)
-                    if isinstance(result, dict):
-                        return result
-                    else:
-                        print(f"ref_proof is not dict type: {type(result)}")
-                        return {}
-                except Exception as eval_error:
-                    print(f"Python dict parsing failed: {eval_error}, content: {ref_proof_str[:100]}...")
-                    return {}
-        return {}
-    except Exception as e:
-        print(f"Failed to extract ref_proof: {e}")
-        return {}
-
-def extract_problem_from_label(label: str) -> str:
-    """Extract problem field from label"""
-    try:
-        problem_match = re.search(r"<problem>(.*?)</problem>", label, re.DOTALL)
-        if problem_match:
-            return problem_match.group(1).strip()
-        return ""
-    except Exception as e:
-        print(f"Failed to extract problem: {e}")
-        return ""
-
-def extract_solution_from_label(label: str) -> str:
-    """Extract solution field from label"""
-    try:
-        solution_match = re.search(r"<solution>(.*?)</solution>", label, re.DOTALL)
-        if solution_match:
-            return solution_match.group(1).strip()
-        return ""
-    except Exception as e:
-        print(f"Failed to extract solution: {e}")
-        return ""
 
     
 
@@ -944,50 +674,36 @@ def reward_func(queries, prompts, labels):
                 
                 # Only make API call if either needs to be calculated
                 if LINK_ACCURACY_REWARD_WEIGHT > 0.0 or FINAL_GOAL_REWARD_WEIGHT > 0.0:
-                    # Extract groundtruth solution
-                    groundtruth_solution = extract_solution_from_label(label)
-                    f.write(f"DEBUG: Extracted groundtruth_solution: {groundtruth_solution}\n")
+                    # Use label directly as groundtruth solution (label is the answer field)
+                    groundtruth_solution = label.strip() if label else ""
+                    f.write(f"DEBUG: Using groundtruth_solution: {groundtruth_solution}\n")
                     if groundtruth_solution:
                         if FORMAT_REWARD_WEIGHT > 0.0:
-                            # New format: choose different processing based on whether format is satisfied
                             if format_reward > 0:
-                                # Format satisfied: use answer content for evaluation
                                 answer_content = extract_answer_with_tags(response)
                                 f.write(f"DEBUG: Extracted answer_content: {answer_content}\n")
                                 if answer_content:
                                     subgoal_results, _ = combined_accuracy_reward_func(answer_content, groundtruth_solution)
                                     f.write(f"DEBUG: Combined API call result - answer_content: subgoal_results={subgoal_results}\n")
-                                    # Manually calculate accuracy
                                     if subgoal_results:
                                         correct_count = sum(1 for subgoal in subgoal_results if subgoal.get('correct', False))
                                         link_accuracy_reward = correct_count / len(subgoal_results)
-                                        # Use last index's true/false as final_goal_reward
                                         last_subgoal = subgoal_results[-1] if subgoal_results else {}
                                         final_goal_reward = 1.0 if last_subgoal.get('correct', False) else 0.0
-                                    f.write(f"DEBUG: Manually calculated link_accuracy={link_accuracy_reward}, final_goal={final_goal_reward}\n")
                             else:
-                                # Format not satisfied: use entire response for evaluation
                                 f.write(f"DEBUG: Using entire response for combined API call\n")
                                 subgoal_results, _ = combined_accuracy_reward_func(response, groundtruth_solution)
                                 f.write(f"DEBUG: Combined API call result - response: subgoal_results={subgoal_results}\n")
-                                # Manually calculate accuracy
                                 if subgoal_results:
                                     correct_count = sum(1 for subgoal in subgoal_results if subgoal.get('correct', False))
                                     link_accuracy_reward = correct_count / len(subgoal_results)
-                                    # Use last index's true/false as final_goal_reward
                                     last_subgoal = subgoal_results[-1] if subgoal_results else {}
                                     final_goal_reward = 1.0 if last_subgoal.get('correct', False) else 0.0
-                                f.write(f"DEBUG: Manually calculated link_accuracy={link_accuracy_reward}, final_goal={final_goal_reward}\n")
                         else:
-                            # Old format: use entire response for evaluation
-                            f.write(f"DEBUG: Old format, using entire response for combined API call\n")
                             subgoal_results, _ = combined_accuracy_reward_func(response, groundtruth_solution)
-                            f.write(f"DEBUG: Combined API call result - response: subgoal_results={subgoal_results}\n")
-                            # Manually calculate accuracy
                             if subgoal_results:
                                 correct_count = sum(1 for subgoal in subgoal_results if subgoal.get('correct', False))
                                 link_accuracy_reward = correct_count / len(subgoal_results)
-                                # Use last index's true/false as final_goal_reward
                                 last_subgoal = subgoal_results[-1] if subgoal_results else {}
                                 final_goal_reward = 1.0 if last_subgoal.get('correct', False) else 0.0
                             f.write(f"DEBUG: Manually calculated link_accuracy={link_accuracy_reward}, final_goal={final_goal_reward}\n")

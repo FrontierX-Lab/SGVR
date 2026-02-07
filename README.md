@@ -38,10 +38,14 @@ Download the GeoGoal-SGVR dataset from [Hugging Face](https://huggingface.co/dat
 
 ```json
 {
-  "id": "0",
-  "message": "[{\"role\": \"user\", \"content\": [{\"type\": \"image\", \"image\": \"file:///path/to/your/image.jpg\"}, {\"type\": \"text\", \"text\": \"Your question here\"}]}]"
+  "id": "example_id",
+  "question": "<image>\nYour geometric problem question here...",
+  "answer": "Your answer",
+  "message": "[{\"role\": \"system\", \"content\": \"You are a helpful assistant...\"}, {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"<image>\\nYour question here...\"}, {\"type\": \"image\", \"image\": \"/path/to/your/image.png\"}]}]",
+  "images": ["/path/to/your/image.png"]
 }
 ```
+
 
 ### API Configuration
 
